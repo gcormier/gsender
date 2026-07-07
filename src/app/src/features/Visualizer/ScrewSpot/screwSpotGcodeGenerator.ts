@@ -1,4 +1,4 @@
-import { computeTargetZ, type ScrewSpotParams, type ScrewSpotPoint } from "./definitions";
+import type { ScrewSpotParams, ScrewSpotPoint } from "./definitions";
 
 interface GenerateArgs {
 	points: ScrewSpotPoint[];
@@ -9,9 +9,46 @@ interface GenerateArgs {
 	// end; we re-assert G90 after it since that helper leaves the modal state to us.
 	retractCode?: string[];
 	returnArray?: boolean;
+	// grblHAL implements the G73 chip-break canned cycle; plain Grbl does not, so we
+	// expand an equivalent peck by hand for it. From controller.type === GRBLHAL.
+	isGrblHal?: boolean;
 }
 
 const fixed = (n: number): number => Number(n.toFixed(3));
+
+// grblHAL retracts a hair between G73 pecks ($28, default 0.1mm). We mirror that when
+// expanding the peck by hand for Grbl. 0.1mm ≈ 0.004in.
+const chipBreakRetract = (units: "mm" | "in"): number => (units === "in" ? 0.004 : 0.1);
+
+/**
+ * Z moves from the plunge height down to the drill depth. With no peck (or a nonsensical
+ * plunge-below-drill), that is a single feed; otherwise a chip-break peck — feed down one
+ * increment, retract a hair to snap the chip, repeat — mirroring grblHAL's G73.
+ */
+function buildPlunge(
+	plungeZ: number,
+	drillZ: number,
+	feed: number,
+	peck: number,
+	chipBreak: number,
+): string[] {
+	if (peck <= 0 || plungeZ <= drillZ) {
+		return [`G1 Z${fixed(drillZ)} F${feed} ;Drill depth`];
+	}
+	const moves: string[] = [];
+	const EPS = 1e-6;
+	let z = plungeZ;
+	while (z - drillZ > EPS) {
+		const next = Math.max(z - peck, drillZ);
+		moves.push(`G1 Z${fixed(next)} F${feed}`);
+		z = next;
+		if (z - drillZ <= EPS) {
+			break;
+		}
+		moves.push(`G0 Z${fixed(z + chipBreak)} ;Chip break`);
+	}
+	return moves;
+}
 
 /**
  * Greedy nearest-neighbour ordering to trim the rapid travel between holes. Seeded
@@ -47,17 +84,39 @@ export function orderPointsNearestNeighbour(
 
 /**
  * Build the spot-drilling program for the picked points. Pure — all machine/store
- * derived values are passed in so it stays trivially testable. Rapids run at an
- * absolute work-Z clearance above the top surface; each hole plunges to the computed
- * target Z at the plunge feed. Injected via controller.command("gcode", …) so the
- * user's loaded job is left untouched.
+ * derived values are passed in so it stays trivially testable. All heights are plain
+ * work-Z values entered by the user: X/Y moves run at the travel height, each hole
+ * rapids down to the plunge height, pecks to the drill depth, then rapids back out to
+ * the travel height. On grblHAL the peck is a compact G73 canned cycle (G98 returns to
+ * the travel height); on Grbl it is expanded by hand. Injected via
+ * controller.command("gcode", …) so the user's loaded job is left untouched.
  */
 export function generateScrewSpotGcode(args: GenerateArgs): string | string[] {
-	const { points, params, units, retractCode = [], returnArray = false } = args;
-	const { spindleRPM, spindleDwell, plungeFeedrate, retractHeight, auxOutput } = params;
+	const {
+		points,
+		params,
+		units,
+		retractCode = [],
+		returnArray = false,
+		isGrblHal = false,
+	} = args;
+	const {
+		spindleRPM,
+		spindleDwell,
+		plungeFeedrate,
+		travelHeight,
+		plungeHeight,
+		drillDepth,
+		peckDepth,
+		auxOutput,
+	} = params;
 
-	const clearanceZ = fixed(Math.abs(retractHeight));
-	const targetZ = computeTargetZ(params);
+	const travelZ = fixed(travelHeight);
+	const plungeZ = fixed(plungeHeight);
+	const drillZ = fixed(drillDepth);
+	const feed = Math.round(plungeFeedrate);
+	const peck = fixed(Math.abs(peckDepth));
+	const usePeck = peck > 0;
 	const ordered = orderPointsNearestNeighbour(points);
 
 	const unitModal = units === "in" ? "G20 ;inches" : "G21 ;mm";
@@ -84,19 +143,41 @@ export function generateScrewSpotGcode(args: GenerateArgs): string | string[] {
 		"",
 	];
 
-	ordered.forEach((pt, i) => {
+	if (isGrblHal && usePeck) {
+		// grblHAL G73: rapid to the initial (travel) plane once, then a chip-break peck
+		// cycle per hole. It's sticky — only the first line carries Z/R/Q/F, the rest are
+		// bare X/Y — and G98 retracts each hole back to the travel plane.
 		gcode.push(
-			`(Spot ${i + 1})`,
-			`G0 Z${clearanceZ}`,
-			`G0 X${fixed(pt.x)} Y${fixed(pt.y)}`,
-			`G1 Z${targetZ} F${Math.round(plungeFeedrate)}`,
-			"",
+			"(Spots — G73 chip-break peck drill)",
+			`G0 Z${travelZ} ;Travel height (G98 initial plane)`,
 		);
-	});
+		ordered.forEach((pt, i) => {
+			const xy = `X${fixed(pt.x)} Y${fixed(pt.y)}`;
+			gcode.push(
+				i === 0
+					? `G98 G90 G73 ${xy} Z${drillZ} R${plungeZ} Q${peck} F${feed} ;Spot 1`
+					: `${xy} ;Spot ${i + 1}`,
+			);
+		});
+		gcode.push("G80 ;Cancel canned cycle", "");
+	} else {
+		const chipBreak = chipBreakRetract(units);
+		ordered.forEach((pt, i) => {
+			gcode.push(
+				`(Spot ${i + 1})`,
+				`G0 Z${travelZ} ;Travel height`,
+				`G0 X${fixed(pt.x)} Y${fixed(pt.y)}`,
+				`G0 Z${plungeZ} ;Plunge height`,
+				...buildPlunge(plungeZ, drillZ, feed, peck, chipBreak),
+				`G0 Z${travelZ} ;Rapid out to travel height`,
+				"",
+			);
+		});
+	}
 
 	gcode.push(
 		"(Footer)",
-		`G0 Z${clearanceZ}`,
+		`G0 Z${travelZ}`,
 		...retractCode,
 		"G90",
 		"M5 ;Turn off spindle",

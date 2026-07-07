@@ -98,6 +98,7 @@ import { VisualizerPlaceholder } from "./Placeholder";
 import Rendering from "./Rendering";
 import {
 	DEFAULT_SCREWSPOT_PARAMS,
+	screwSpotHeightsReason,
 	type ScrewSpotParams,
 } from "./ScrewSpot/definitions";
 import { ScrewSpotPanel } from "./ScrewSpot/ScrewSpotPanel";
@@ -140,19 +141,21 @@ const SCREW_SPOT_TOGGLE_POSITION = {
 // Screw Spot params are stored canonically in millimetres; these fields convert for
 // imperial display/entry (spindle RPM, dwell seconds and enums stay unit-agnostic).
 type ScrewSpotLengthField =
-	| "spotDepth"
-	| "stockThickness"
+	| "travelHeight"
+	| "plungeHeight"
+	| "drillDepth"
+	| "peckDepth"
 	| "bitDiameter"
 	| "safeRadius"
-	| "plungeFeedrate"
-	| "retractHeight";
+	| "plungeFeedrate";
 const SCREW_SPOT_LENGTH_FIELDS: ScrewSpotLengthField[] = [
-	"spotDepth",
-	"stockThickness",
+	"travelHeight",
+	"plungeHeight",
+	"drillDepth",
+	"peckDepth",
 	"bitDiameter",
 	"safeRadius",
 	"plungeFeedrate",
-	"retractHeight",
 ];
 
 function convertScrewSpotParams(
@@ -1026,13 +1029,19 @@ class Visualizer extends Component {
 				points: [],
 				params: (() => {
 					const units = store.get("workspace.units", METRIC_UNITS);
+					// Merge over defaults so params persisted before the Z rework (which
+					// lack travel/plunge/drill heights) don't come through as undefined.
 					const stored = this.config.get(
 						"screwSpot.params",
-						DEFAULT_SCREWSPOT_PARAMS,
-					) as ScrewSpotParams;
+						{},
+					) as Partial<ScrewSpotParams>;
+					const merged: ScrewSpotParams = {
+						...DEFAULT_SCREWSPOT_PARAMS,
+						...stored,
+					};
 					return units === IMPERIAL_UNITS
-						? convertScrewSpotParams(stored, convertToImperial)
-						: stored;
+						? convertScrewSpotParams(merged, convertToImperial)
+						: merged;
 				})(),
 			},
 			isAgitated: false, // Defaults to false
@@ -1685,12 +1694,18 @@ class Visualizer extends Component {
 			toast.info(reason);
 			return;
 		}
+		const heightsIssue = screwSpotHeightsReason(params);
+		if (heightsIssue) {
+			toast.info(heightsIssue);
+			return;
+		}
 		const gcode = generateScrewSpotGcode({
 			points,
 			params,
 			units: units === METRIC_UNITS ? "mm" : "in",
 			retractCode: getSafeRetractCode(),
 			returnArray: true,
+			isGrblHal: controller.type === GRBLHAL,
 		});
 		controller.command("gcode", gcode, controller.context);
 		toast.success(
@@ -1753,10 +1768,14 @@ class Visualizer extends Component {
 
 		const screwSpotReadiness = this.screwSpotReadiness();
 		const screwSpotHasPoints = state.screwSpot.points.length > 0;
-		const screwSpotCanRun = screwSpotReadiness.ok && screwSpotHasPoints;
+		const screwSpotHeightsIssue = screwSpotHeightsReason(state.screwSpot.params);
+		const screwSpotCanRun =
+			screwSpotReadiness.ok && screwSpotHasPoints && !screwSpotHeightsIssue;
 		const screwSpotRunReason = !screwSpotHasPoints
 			? "Add at least one point"
-			: screwSpotReadiness.reason;
+			: !screwSpotReadiness.ok
+				? screwSpotReadiness.reason
+				: screwSpotHeightsIssue;
 
 		if (isSecondary) {
 			return (

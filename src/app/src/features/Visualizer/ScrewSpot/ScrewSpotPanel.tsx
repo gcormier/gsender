@@ -4,11 +4,11 @@ import Tooltip from "app/components/Tooltip";
 import type { UNITS_EN } from "app/definitions/general";
 import cx from "classnames";
 import { Check, Trash2, X } from "lucide-react";
-import type {
-	AuxOutput,
-	ScrewSpotParams,
-	ScrewSpotPoint,
-	ZReference,
+import {
+	type AuxOutput,
+	type ScrewSpotParams,
+	type ScrewSpotPoint,
+	screwSpotHeightsReason,
 } from "./definitions";
 
 interface ScrewSpotPanelProps {
@@ -68,6 +68,12 @@ function Field({
 	onChange: (value: number) => void;
 	min?: number;
 }) {
+	// The unit is an absolutely-positioned overlay pinned to the input's right edge,
+	// and the shared Input's reserved space for it collapses under tailwind-merge. Pad
+	// the right side to the suffix width (~7px per char at text-xs, plus inset + gap)
+	// so a right-aligned value can never slide underneath the unit.
+	const suffixPadding = suffix.length * 7 + 16;
+
 	return (
 		<label className="flex items-center justify-between gap-2">
 			<span className="text-sm text-gray-600 dark:text-gray-300">{label}</span>
@@ -78,6 +84,7 @@ function Field({
 				value={value}
 				wrapperClassName="w-28"
 				className="text-right"
+				style={{ paddingRight: suffixPadding }}
 				onChange={(e) => onChange(Number(e.target.value))}
 			/>
 		</label>
@@ -100,6 +107,7 @@ export function ScrewSpotPanel({
 	onClose,
 }: ScrewSpotPanelProps) {
 	const feedSuffix = `${units}/min`;
+	const heightsIssue = screwSpotHeightsReason(params);
 
 	return (
 		<div className="absolute right-2 top-2 bottom-2 z-[10001] flex w-72 flex-col rounded-lg border border-gray-300 bg-white/95 shadow-xl backdrop-blur dark:border-dark-lighter dark:bg-dark/95">
@@ -125,37 +133,38 @@ export function ScrewSpotPanel({
 			<div className="flex-1 space-y-4 overflow-y-auto px-4 py-3">
 				<div className="space-y-2">
 					<span className="text-xs font-medium uppercase text-gray-400">
-						Depth
+						Heights
 					</span>
-					<div className="flex items-center justify-between gap-2">
-						<span className="text-sm text-gray-600 dark:text-gray-300">
-							Z zero at
-						</span>
-						<Segmented<ZReference>
-							value={params.zReference}
-							options={[
-								{ value: "stockTop", label: "Stock top" },
-								{ value: "spoilboard", label: "Spoilboard" },
-							]}
-							onChange={(zReference) => onParamChange({ zReference })}
-						/>
-					</div>
-					{params.zReference === "stockTop" && (
-						<Field
-							label="Stock thickness"
-							suffix={units}
-							min={0}
-							value={params.stockThickness}
-							onChange={(stockThickness) => onParamChange({ stockThickness })}
-						/>
-					)}
 					<Field
-						label="Spot depth"
+						label="Travel height"
+						suffix={units}
+						value={params.travelHeight}
+						onChange={(travelHeight) => onParamChange({ travelHeight })}
+					/>
+					<Field
+						label="Plunge height"
+						suffix={units}
+						value={params.plungeHeight}
+						onChange={(plungeHeight) => onParamChange({ plungeHeight })}
+					/>
+					<Field
+						label="Drill depth"
+						suffix={units}
+						value={params.drillDepth}
+						onChange={(drillDepth) => onParamChange({ drillDepth })}
+					/>
+					<Field
+						label="Peck depth"
 						suffix={units}
 						min={0}
-						value={params.spotDepth}
-						onChange={(spotDepth) => onParamChange({ spotDepth })}
+						value={params.peckDepth}
+						onChange={(peckDepth) => onParamChange({ peckDepth })}
 					/>
+					{heightsIssue && (
+						<p className="text-xs text-amber-600 dark:text-amber-500">
+							{heightsIssue} — heights must descend travel &gt; plunge &gt; drill.
+						</p>
+					)}
 				</div>
 
 				<div className="space-y-2">
@@ -202,13 +211,6 @@ export function ScrewSpotPanel({
 						min={1}
 						value={params.plungeFeedrate}
 						onChange={(plungeFeedrate) => onParamChange({ plungeFeedrate })}
-					/>
-					<Field
-						label="Retract clearance"
-						suffix={units}
-						min={0}
-						value={params.retractHeight}
-						onChange={(retractHeight) => onParamChange({ retractHeight })}
 					/>
 					<div className="flex items-center justify-between gap-2">
 						<span className="text-sm text-gray-600 dark:text-gray-300">
