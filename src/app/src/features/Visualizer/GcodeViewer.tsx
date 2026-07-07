@@ -826,15 +826,16 @@ class GcodeViewer extends Component<Props> {
 	}
 
 	// gviewer's worldToScreen mirrors screenToWorld (added alongside it); guarded so a
-	// viewer build without it degrades to no overlay rather than crashing.
-	projectPoint(x: number, y: number): { x: number; y: number } | null {
+	// viewer build without it degrades to no overlay rather than crashing. Screw Spot
+	// picks on the Z=0 plane, but z is threaded through for future off-plane callers.
+	projectPoint(x: number, y: number, z = 0): { x: number; y: number } | null {
 		// Cast so this compiles against a gviewer build that predates worldToScreen.
 		const viewer = this.viewer3d as
 			| (GViewer3D & {
 					worldToScreen?: (
 						x: number,
 						y: number,
-						z: number,
+						z?: number,
 					) => { x: number; y: number } | null;
 			  })
 			| null;
@@ -842,7 +843,7 @@ class GcodeViewer extends Component<Props> {
 		if (!project) {
 			return null;
 		}
-		const s = project(x, y, 0);
+		const s = project(x, y, z);
 		return s ? { x: s.x, y: s.y } : null;
 	}
 
