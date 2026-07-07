@@ -68,25 +68,25 @@ function Field({
 	onChange: (value: number) => void;
 	min?: number;
 }) {
-	// The unit is an absolutely-positioned overlay pinned to the input's right edge,
-	// and the shared Input's reserved space for it collapses under tailwind-merge. Pad
-	// the right side to the suffix width (~7px per char at text-xs, plus inset + gap)
-	// so a right-aligned value can never slide underneath the unit.
-	const suffixPadding = suffix.length * 7 + 16;
-
+	// Lay the unit out as a flex sibling of a borderless input rather than using the
+	// shared Input's absolute suffix overlay: the unit reserves its own width, so the
+	// right-aligned value can never slide underneath it no matter how wide either is.
 	return (
 		<label className="flex items-center justify-between gap-2">
 			<span className="text-sm text-gray-600 dark:text-gray-300">{label}</span>
-			<ControlledInput
-				type="number"
-				suffix={suffix}
-				min={min}
-				value={value}
-				wrapperClassName="w-28"
-				className="text-right"
-				style={{ paddingRight: suffixPadding }}
-				onChange={(e) => onChange(Number(e.target.value))}
-			/>
+			<div className="flex h-10 w-28 items-center gap-1 rounded-md border border-input bg-background pr-2 dark:border-gray-500 dark:bg-dark">
+				<ControlledInput
+					type="number"
+					min={min}
+					value={value}
+					wrapperClassName="w-auto min-w-0 flex-1"
+					className="h-full w-full border-none bg-transparent px-2 py-0 text-right text-robin-500 dark:bg-transparent dark:text-white"
+					onChange={(e) => onChange(Number(e.target.value))}
+				/>
+				<span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+					{suffix}
+				</span>
+			</div>
 		</label>
 	);
 }
