@@ -1,5 +1,6 @@
 import type { BasicPosition, BBox, UNITS_EN } from "app/definitions/general";
 import type { ATCIMacroConfig } from "app/features/ATC/assets/defaultATCIMacros.ts";
+import type { ScrewSpotParams, ScrewSpotPoint } from "./ScrewSpot/definitions";
 import type { WORKFLOW_STATES_T } from "app/store/definitions";
 import type { WORKSPACE_MODE_T } from "app/workspace/definitions";
 import type {
@@ -143,6 +144,11 @@ export interface State {
 	cameraMode: CAMERA_MODES_T;
 	cameraPosition: CAMERA_POSITIONS_T; // 'Top', '3D', 'Front', 'Left', 'Right'
 	moveToHere: boolean; // "Move To Here" placement mode is armed
+	screwSpot: {
+		active: boolean; // "Screw Spot" picking mode is armed
+		points: ScrewSpotPoint[]; // picked hole locations, in work XY
+		params: ScrewSpotParams;
+	};
 	isConnected?: boolean; // Injected at render from connection state
 	isAgitated: boolean; // Defaults to false
 	currentTheme: Map<string, string>;
@@ -207,6 +213,15 @@ export interface Actions {
 		toFreeView: () => void;
 		toggleMoveToHere: () => void;
 		disableMoveToHere: () => void;
+	};
+	screwSpot: {
+		toggle: () => void;
+		disable: () => void;
+		addPoint: (point: ScrewSpotPoint) => void;
+		removePoint: (index: number) => void;
+		clearPoints: () => void;
+		setParams: (params: Partial<ScrewSpotParams>) => void;
+		run: () => void;
 	};
 	handleLiteModeToggle: () => void;
 	lineWarning: {

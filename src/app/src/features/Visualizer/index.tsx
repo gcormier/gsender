@@ -48,7 +48,7 @@ import _ from "lodash";
 import debounce from "lodash/debounce";
 import get from "lodash/get";
 import includes from "lodash/includes";
-import { Crosshair, FrownIcon } from "lucide-react";
+import { CircleDot, Crosshair, FrownIcon } from "lucide-react";
 import PropTypes from "prop-types";
 import pubsub from "pubsub-js";
 import { Component } from "react";
@@ -63,10 +63,11 @@ import {
 	GRBL_ACTIVE_STATE_IDLE,
 	GRBL_ACTIVE_STATE_RUN,
 	GRBLHAL,
+	// Units
+	IMPERIAL_UNITS,
 	LIGHTWEIGHT_OPTIONS,
 	// Marlin
 	MARLIN,
-	// Units
 	METRIC_UNITS,
 	OVERRIDES_CATEGORY,
 	RENDER_LOADING,
@@ -88,11 +89,19 @@ import useKeybinding from "../../lib/useKeybinding";
 import WidgetConfig from "../WidgetConfig/WidgetConfig";
 import { CAMERA_MODE_PAN, CAMERA_MODE_ROTATE } from "./constants";
 import type { Actions, State } from "./definitions";
+import { getSafeRetractCode } from "app/features/DRO/utils/SafeMove";
+import { convertToImperial, convertToMetric } from "app/lib/units";
 import GcodeEditorOverlay from "./GcodeEditorOverlay";
 import GcodeViewer from "./GcodeViewer";
 import Loading from "./Loading";
 import { VisualizerPlaceholder } from "./Placeholder";
 import Rendering from "./Rendering";
+import {
+	DEFAULT_SCREWSPOT_PARAMS,
+	type ScrewSpotParams,
+} from "./ScrewSpot/definitions";
+import { ScrewSpotPanel } from "./ScrewSpot/ScrewSpotPanel";
+import { generateScrewSpotGcode } from "./ScrewSpot/screwSpotGcodeGenerator";
 import SoftLimitsWarningArea from "./SoftLimitsWarningArea";
 
 interface Views {
@@ -119,6 +128,43 @@ const MOVE_TO_HERE_TOGGLE_POSITION = {
 		FLOATING_BUTTON_SIZE_PX +
 		VIEWCUBE_CONTROL_GAP_PX,
 };
+// "Screw Spot" toggle stacks above the "Move To Here" toggle.
+const SCREW_SPOT_TOGGLE_POSITION = {
+	left: LIGHTWEIGHT_TOGGLE_POSITION.left,
+	bottom:
+		MOVE_TO_HERE_TOGGLE_POSITION.bottom +
+		FLOATING_BUTTON_SIZE_PX +
+		VIEWCUBE_CONTROL_GAP_PX,
+};
+
+// Screw Spot params are stored canonically in millimetres; these fields convert for
+// imperial display/entry (spindle RPM, dwell seconds and enums stay unit-agnostic).
+type ScrewSpotLengthField =
+	| "spotDepth"
+	| "stockThickness"
+	| "bitDiameter"
+	| "safeRadius"
+	| "plungeFeedrate"
+	| "retractHeight";
+const SCREW_SPOT_LENGTH_FIELDS: ScrewSpotLengthField[] = [
+	"spotDepth",
+	"stockThickness",
+	"bitDiameter",
+	"safeRadius",
+	"plungeFeedrate",
+	"retractHeight",
+];
+
+function convertScrewSpotParams(
+	params: ScrewSpotParams,
+	convert: (value: number) => number,
+): ScrewSpotParams {
+	const out = { ...params };
+	for (const field of SCREW_SPOT_LENGTH_FIELDS) {
+		out[field] = Number(convert(params[field]));
+	}
+	return out;
+}
 
 class Visualizer extends Component {
 	static propTypes = {
@@ -597,11 +643,77 @@ class Visualizer extends Component {
 					return {
 						moveToHere,
 						cameraPosition: moveToHere ? "Top" : state.cameraPosition,
+						// Move To Here and Screw Spot both lock the camera; only one arms.
+						screwSpot: moveToHere
+							? { ...state.screwSpot, active: false }
+							: state.screwSpot,
 					};
 				});
 			},
 			disableMoveToHere: () => {
 				this.setState({ moveToHere: false });
+			},
+		},
+		// Arm/disarm "Screw Spot": pick safe XY spots on the top view, then run a
+		// spot-drilling routine at those points. Arming pins the Top view.
+		screwSpot: {
+			toggle: () => {
+				this.setState((state) => {
+					const active = !state.screwSpot.active;
+					return {
+						moveToHere: active ? false : state.moveToHere,
+						cameraPosition: active ? "Top" : state.cameraPosition,
+						screwSpot: { ...state.screwSpot, active },
+					};
+				});
+			},
+			disable: () => {
+				this.setState((state) => ({
+					screwSpot: { ...state.screwSpot, active: false },
+				}));
+			},
+			addPoint: (point) => {
+				this.setState((state) => ({
+					screwSpot: {
+						...state.screwSpot,
+						points: [...state.screwSpot.points, point],
+					},
+				}));
+			},
+			removePoint: (index) => {
+				this.setState((state) => ({
+					screwSpot: {
+						...state.screwSpot,
+						points: state.screwSpot.points.filter((_, i) => i !== index),
+					},
+				}));
+			},
+			clearPoints: () => {
+				this.setState((state) => ({
+					screwSpot: { ...state.screwSpot, points: [] },
+				}));
+			},
+			setParams: (patch) => {
+				this.setState(
+					(state) => ({
+						screwSpot: {
+							...state.screwSpot,
+							params: { ...state.screwSpot.params, ...patch },
+						},
+					}),
+					() => {
+						// Persist canonically in millimetres.
+						const { params } = this.state.screwSpot;
+						const metric =
+							this.state.units === IMPERIAL_UNITS
+								? convertScrewSpotParams(params, convertToMetric)
+								: params;
+						this.config.set("screwSpot.params", metric);
+					},
+				);
+			},
+			run: () => {
+				this.runScrewSpot();
 			},
 		},
 		handleLiteModeToggle: () => {
@@ -909,6 +1021,20 @@ class Visualizer extends Component {
 			cameraMode: this.config.get("cameraMode", CAMERA_MODE_PAN),
 			cameraPosition: "3D", // 'Top', '3D', 'Front', 'Left', 'Right'
 			moveToHere: false, // "Move To Here" placement mode is armed
+			screwSpot: {
+				active: false,
+				points: [],
+				params: (() => {
+					const units = store.get("workspace.units", METRIC_UNITS);
+					const stored = this.config.get(
+						"screwSpot.params",
+						DEFAULT_SCREWSPOT_PARAMS,
+					) as ScrewSpotParams;
+					return units === IMPERIAL_UNITS
+						? convertScrewSpotParams(stored, convertToImperial)
+						: stored;
+				})(),
+			},
 			isAgitated: false, // Defaults to false
 			currentTheme: getVisualizerTheme(),
 			currentTab: 0,
@@ -1530,6 +1656,49 @@ class Visualizer extends Component {
 		}
 	}
 
+	// Connected + idle + non-rotary. Work zero / tool length are the user's
+	// responsibility (the panel reminds them), so they aren't gated here.
+	screwSpotReadiness() {
+		const { isConnected, activeState } = this.props;
+		const fileType = get(reduxStore.getState(), "file.fileType");
+		const isRotary = fileType === "ROTARY" || fileType === "FOUR_AXIS";
+		if (!isConnected) {
+			return { ok: false, reason: "Connect to a machine first" };
+		}
+		if (activeState !== GRBL_ACTIVE_STATE_IDLE) {
+			return { ok: false, reason: "Machine must be idle" };
+		}
+		if (isRotary) {
+			return { ok: false, reason: "Not available for rotary files" };
+		}
+		return { ok: true, reason: "" };
+	}
+
+	runScrewSpot = () => {
+		const { screwSpot, units } = this.state;
+		const { points, params } = screwSpot;
+		if (points.length === 0) {
+			return;
+		}
+		const { ok, reason } = this.screwSpotReadiness();
+		if (!ok) {
+			toast.info(reason);
+			return;
+		}
+		const gcode = generateScrewSpotGcode({
+			points,
+			params,
+			units: units === METRIC_UNITS ? "mm" : "in",
+			retractCode: getSafeRetractCode(),
+			returnArray: true,
+		});
+		controller.command("gcode", gcode, controller.context);
+		toast.success(
+			`Spot drilling ${points.length} point${points.length === 1 ? "" : "s"}`,
+		);
+		this.actions.screwSpot.disable();
+	};
+
 	render() {
 		const {
 			renderState,
@@ -1581,6 +1750,13 @@ class Visualizer extends Component {
 		};
 
 		const webGLAvailable = WebGL.isWebGLAvailable();
+
+		const screwSpotReadiness = this.screwSpotReadiness();
+		const screwSpotHasPoints = state.screwSpot.points.length > 0;
+		const screwSpotCanRun = screwSpotReadiness.ok && screwSpotHasPoints;
+		const screwSpotRunReason = !screwSpotHasPoints
+			? "Add at least one point"
+			: screwSpotReadiness.reason;
 
 		if (isSecondary) {
 			return (
@@ -1651,6 +1827,35 @@ class Visualizer extends Component {
 
 						{state.isConnected && (
 							<Tooltip
+								content="Screw Spot: click safe spots to spot-drill for hold-down screws"
+								side="top"
+							>
+								<button
+									type="button"
+									style={SCREW_SPOT_TOGGLE_POSITION}
+									className={cx(
+										"absolute z-[10000] inline-flex h-11 w-11 -translate-x-1/2 items-center justify-center rounded-full border bg-dark-darker/70 shadow-[0_10px_30px_rgba(0,_0,_0,_0.25)] transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-dark-darker active:scale-[0.98] active:bg-dark-darker/85 mb-5",
+										{
+											"border-[rgba(14,_246,_174,_0.95)] text-[rgba(14,_246,_174,_0.95)] shadow-[0_0_0_1px_rgba(14,_246,_174,_0.35),0_10px_30px_rgba(0,_0,_0,_0.35)] hover:border-[rgba(14,_246,_174,_0.95)] hover:text-[rgba(14,_246,_174,_0.95)] hover:shadow-[0_0_0_1px_rgba(14,_246,_174,_0.45),0_12px_32px_rgba(0,_0,_0,_0.4)]":
+												state.screwSpot.active,
+											"border-gray-400/40 text-gray-300 hover:border-gray-200/70 hover:text-gray-100 hover:shadow-[0_12px_32px_rgba(0,_0,_0,_0.35)]":
+												!state.screwSpot.active,
+										},
+									)}
+									aria-label="Screw Spot"
+									aria-pressed={state.screwSpot.active}
+									onClick={() => actions.screwSpot.toggle()}
+								>
+									<CircleDot
+										aria-hidden="true"
+										className="pointer-events-none h-5 w-5 shrink-0"
+									/>
+								</button>
+							</Tooltip>
+						)}
+
+						{state.isConnected && (
+							<Tooltip
 								content="Move To Here: press and hold a spot to move the spindle there"
 								side="top"
 							>
@@ -1676,6 +1881,20 @@ class Visualizer extends Component {
 									/>
 								</button>
 							</Tooltip>
+						)}
+
+						{state.isConnected && state.screwSpot.active && (
+							<ScrewSpotPanel
+								params={state.screwSpot.params}
+								points={state.screwSpot.points}
+								units={state.units}
+								canRun={screwSpotCanRun}
+								runDisabledReason={screwSpotRunReason}
+								onParamChange={actions.screwSpot.setParams}
+								onClear={actions.screwSpot.clearPoints}
+								onRun={actions.screwSpot.run}
+								onClose={actions.screwSpot.disable}
+							/>
 						)}
 
 						<Tooltip content={liteModeActionLabel} side="top">

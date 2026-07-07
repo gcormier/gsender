@@ -22,6 +22,7 @@
  */
 import type { MachineProfile } from 'app/definitions/firmware';
 import { defaultATCIMacros } from 'app/features/ATC/assets/defaultATCIMacros.ts';
+import { DEFAULT_SCREWSPOT_PARAMS } from 'app/features/Visualizer/ScrewSpot/definitions';
 import machineProfiles from 'app/features/Config/assets/MachineDefaults/defaultMachineProfiles.ts';
 import type { SPINDLE } from 'app/lib/definitions/gcode_virtualization';
 import {
@@ -442,6 +443,9 @@ const defaultState: State = {
             debug: {
                 profileWorker: false,
                 profileSampleEvery: 10000,
+            },
+            screwSpot: {
+                params: DEFAULT_SCREWSPOT_PARAMS,
             },
         },
     },

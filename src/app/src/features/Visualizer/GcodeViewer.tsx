@@ -169,6 +169,20 @@ class GcodeViewer extends Component<Props> {
 
 	mthIndicator: HTMLDivElement | null = null;
 
+	// "Screw Spot" picking-mode state: single-click to add/remove points, with a
+	// live SVG marker overlay (hole + safe-radius rings) redrawn each frame.
+	screwSpotActive = false;
+
+	ssPointerId: number | null = null;
+
+	ssStart: { x: number; y: number } | null = null;
+
+	ssMoved = false;
+
+	ssOverlay: SVGSVGElement | null = null;
+
+	ssRaf: number | null = null;
+
 	componentDidMount() {
 		this.createViewer();
 		this.subscribe();
@@ -184,6 +198,7 @@ class GcodeViewer extends Component<Props> {
 		this.unsubscribe();
 		this.reduxUnsub?.();
 		this.setMoveToHereMode(false);
+		this.setScrewSpotMode(false);
 		this.viewer3d?.dispose();
 		this.viewerSvg?.dispose();
 		this.viewer3d = null;
@@ -196,9 +211,12 @@ class GcodeViewer extends Component<Props> {
 		// leaves `cameraPosition` unchanged (still "Top").
 		const armingMoveToHere =
 			!prevProps.state.moveToHere && this.props.state.moveToHere;
+		const armingScrewSpot =
+			!prevProps.state.screwSpot.active && this.props.state.screwSpot.active;
 		if (
 			prevProps.cameraPosition !== this.props.cameraPosition ||
-			armingMoveToHere
+			armingMoveToHere ||
+			armingScrewSpot
 		) {
 			this.snapToView();
 		}
@@ -206,6 +224,13 @@ class GcodeViewer extends Component<Props> {
 		// "Move To Here" placement mode armed/disarmed.
 		if (prevProps.state.moveToHere !== this.props.state.moveToHere) {
 			this.setMoveToHereMode(this.props.state.moveToHere);
+		}
+
+		// "Screw Spot" picking mode armed/disarmed.
+		if (
+			prevProps.state.screwSpot.active !== this.props.state.screwSpot.active
+		) {
+			this.setScrewSpotMode(this.props.state.screwSpot.active);
 		}
 
 		if (!prevProps.show && this.props.show) {
@@ -694,6 +719,241 @@ class GcodeViewer extends Component<Props> {
 			this.mthIndicator.parentElement.removeChild(this.mthIndicator);
 		}
 		this.mthIndicator = null;
+	}
+
+	// --- "Screw Spot" picking mode ------------------------------------------
+
+	// Arm/disarm click-to-place. Like Move To Here, rotation is locked (pan + zoom
+	// stay live) and the cursor becomes a crosshair; additionally a full-viewport SVG
+	// overlay is mounted and redrawn each frame to preview the picked holes.
+	setScrewSpotMode(enabled: boolean) {
+		// Placement is a primary-visualizer concept; never arm on the secondary.
+		if (enabled && this.props.isSecondary) {
+			return;
+		}
+
+		this.screwSpotActive = enabled;
+		const dom = this.containerRef;
+
+		if (enabled) {
+			this.viewer3d?.setRotateEnabled(false);
+			if (dom) {
+				dom.style.cursor = "crosshair";
+				dom.addEventListener("pointerdown", this.handleScrewSpotPointerDown);
+			}
+			window.addEventListener("pointermove", this.handleScrewSpotPointerMove);
+			window.addEventListener("pointerup", this.handleScrewSpotPointerUp);
+			window.addEventListener("pointercancel", this.handleScrewSpotPointerUp);
+			this.startScrewSpotOverlay();
+		} else {
+			this.viewer3d?.setRotateEnabled(true);
+			if (dom) {
+				dom.style.cursor = "";
+				dom.removeEventListener("pointerdown", this.handleScrewSpotPointerDown);
+			}
+			window.removeEventListener("pointermove", this.handleScrewSpotPointerMove);
+			window.removeEventListener("pointerup", this.handleScrewSpotPointerUp);
+			window.removeEventListener("pointercancel", this.handleScrewSpotPointerUp);
+			this.stopScrewSpotOverlay();
+			this.ssPointerId = null;
+			this.ssStart = null;
+			this.ssMoved = false;
+		}
+	}
+
+	handleScrewSpotPointerDown = (e: PointerEvent) => {
+		if (!this.screwSpotActive) {
+			return;
+		}
+		if (e.button !== undefined && e.button !== 0) {
+			return;
+		}
+		if (this.ssPointerId !== null) {
+			return;
+		}
+		this.ssPointerId = e.pointerId;
+		this.ssStart = { x: e.clientX, y: e.clientY };
+		this.ssMoved = false;
+	};
+
+	handleScrewSpotPointerMove = (e: PointerEvent) => {
+		if (this.ssPointerId === null || e.pointerId !== this.ssPointerId) {
+			return;
+		}
+		if (!this.ssStart) {
+			return;
+		}
+		const dx = e.clientX - this.ssStart.x;
+		const dy = e.clientY - this.ssStart.y;
+		// Drift beyond the threshold means the user is panning, not placing.
+		if (Math.hypot(dx, dy) > MOVE_TO_HERE_CANCEL_PX) {
+			this.ssMoved = true;
+		}
+	};
+
+	handleScrewSpotPointerUp = (e: PointerEvent) => {
+		if (this.ssPointerId === null || e.pointerId !== this.ssPointerId) {
+			return;
+		}
+		const { clientX, clientY } = e;
+		const moved = this.ssMoved;
+		this.ssPointerId = null;
+		this.ssStart = null;
+		this.ssMoved = false;
+		// A drag was a pan; only a clean click places or removes a point.
+		if (!moved) {
+			this.commitScrewSpotClick(clientX, clientY);
+		}
+	};
+
+	commitScrewSpotClick(clientX: number, clientY: number) {
+		if (this.isRotaryFile) {
+			toast.info("Screw Spot isn't available for rotary files");
+			this.props.actions.screwSpot.disable();
+			return;
+		}
+		const world = this.getWorkCoordsFromClient(clientX, clientY);
+		if (!world) {
+			return;
+		}
+		// Clicking an existing marker removes it; an empty spot adds a new one.
+		const hitIndex = this.findScrewSpotAt(clientX, clientY);
+		if (hitIndex >= 0) {
+			this.props.actions.screwSpot.removePoint(hitIndex);
+		} else {
+			this.props.actions.screwSpot.addPoint(world);
+		}
+	}
+
+	// gviewer's worldToScreen mirrors screenToWorld (added alongside it); guarded so a
+	// viewer build without it degrades to no overlay rather than crashing.
+	projectPoint(x: number, y: number): { x: number; y: number } | null {
+		// Cast so this compiles against a gviewer build that predates worldToScreen.
+		const viewer = this.viewer3d as
+			| (GViewer3D & {
+					worldToScreen?: (
+						x: number,
+						y: number,
+						z: number,
+					) => { x: number; y: number } | null;
+			  })
+			| null;
+		const project = viewer?.worldToScreen?.bind(viewer);
+		if (!project) {
+			return null;
+		}
+		const s = project(x, y, 0);
+		return s ? { x: s.x, y: s.y } : null;
+	}
+
+	// Pixels per work unit. In the pinned Top orthographic view the scale is uniform,
+	// so one projected unit vector is enough to size the hole/safe rings.
+	computeUnitToPx(): number {
+		const a = this.projectPoint(0, 0);
+		const b = this.projectPoint(1, 0);
+		if (!a || !b) {
+			return 1;
+		}
+		return Math.hypot(b.x - a.x, b.y - a.y) || 1;
+	}
+
+	findScrewSpotAt(clientX: number, clientY: number): number {
+		const { points, params } = this.props.state.screwSpot;
+		const unitToPx = this.computeUnitToPx();
+		const hitRadius = Math.max(6, (params.bitDiameter / 2) * unitToPx);
+		for (let i = points.length - 1; i >= 0; i--) {
+			const p = this.projectPoint(points[i].x, points[i].y);
+			if (!p) {
+				continue;
+			}
+			if (Math.hypot(clientX - p.x, clientY - p.y) <= hitRadius) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	startScrewSpotOverlay() {
+		this.stopScrewSpotOverlay();
+		const svg = document.createElementNS(
+			"http://www.w3.org/2000/svg",
+			"svg",
+		) as SVGSVGElement;
+		svg.style.cssText = [
+			"position:fixed",
+			"inset:0",
+			"width:100vw",
+			"height:100vh",
+			"pointer-events:none",
+			"z-index:10000",
+		].join(";");
+		document.body.appendChild(svg);
+		this.ssOverlay = svg;
+
+		const draw = () => {
+			this.drawScrewSpotOverlay();
+			this.ssRaf = requestAnimationFrame(draw);
+		};
+		this.ssRaf = requestAnimationFrame(draw);
+	}
+
+	stopScrewSpotOverlay() {
+		if (this.ssRaf !== null) {
+			cancelAnimationFrame(this.ssRaf);
+			this.ssRaf = null;
+		}
+		if (this.ssOverlay?.parentElement) {
+			this.ssOverlay.parentElement.removeChild(this.ssOverlay);
+		}
+		this.ssOverlay = null;
+	}
+
+	drawScrewSpotOverlay() {
+		const svg = this.ssOverlay;
+		if (!svg || !this.viewer3d) {
+			return;
+		}
+		while (svg.firstChild) {
+			svg.removeChild(svg.firstChild);
+		}
+
+		const { points, params } = this.props.state.screwSpot;
+		const unitToPx = this.computeUnitToPx();
+		const holeR = Math.max(1.5, (params.bitDiameter / 2) * unitToPx);
+		const safeR = Math.max(holeR, params.safeRadius * unitToPx);
+		const ns = "http://www.w3.org/2000/svg";
+		const accent = "rgba(14, 246, 174, 0.95)";
+
+		const circle = (
+			cx: number,
+			cy: number,
+			r: number,
+			stroke: string,
+			dashed: boolean,
+			fill = "none",
+		) => {
+			const c = document.createElementNS(ns, "circle");
+			c.setAttribute("cx", String(cx));
+			c.setAttribute("cy", String(cy));
+			c.setAttribute("r", String(r));
+			c.setAttribute("fill", fill);
+			c.setAttribute("stroke", stroke);
+			c.setAttribute("stroke-width", "1.5");
+			if (dashed) {
+				c.setAttribute("stroke-dasharray", "4 3");
+			}
+			return c;
+		};
+
+		points.forEach((pt) => {
+			const s = this.projectPoint(pt.x, pt.y);
+			if (!s) {
+				return;
+			}
+			svg.appendChild(circle(s.x, s.y, safeR, "rgba(148, 163, 184, 0.9)", true));
+			svg.appendChild(circle(s.x, s.y, holeR, accent, false));
+			svg.appendChild(circle(s.x, s.y, 1.5, accent, false, accent));
+		});
 	}
 
 	// --- imperative API consumed by the connected container (index.tsx) -----
