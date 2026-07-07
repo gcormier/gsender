@@ -50,6 +50,10 @@ export interface Visualizer {
 		limits: {
 			visible: boolean;
 		};
+		machineBed: {
+			visible: boolean;
+			trimGridToBed: boolean;
+		};
 		coordinateSystem: {
 			visible: boolean;
 		};
@@ -73,6 +77,7 @@ export interface Visualizer {
 	showLineWarnings: boolean;
 	showSoftLimitWarning: boolean;
 	hideProcessedLines: boolean;
+	boundingBoxLabels: boolean;
 	rotaryDiameterOffsetEnabled: boolean;
 	debug: {
 		profileWorker: boolean;
@@ -121,6 +126,10 @@ export interface State {
 	objects: {
 		limits: {
 			visible: boolean;
+		};
+		machineBed: {
+			visible: boolean;
+			trimGridToBed: boolean;
 		};
 		coordinateSystem: {
 			visible: boolean;
