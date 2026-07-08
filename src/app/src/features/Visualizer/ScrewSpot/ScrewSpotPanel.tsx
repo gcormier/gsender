@@ -68,25 +68,18 @@ function Field({
 	onChange: (value: number) => void;
 	min?: number;
 }) {
-	// Lay the unit out as a flex sibling of a borderless input rather than using the
-	// shared Input's absolute suffix overlay: the unit reserves its own width, so the
-	// right-aligned value can never slide underneath it no matter how wide either is.
 	return (
 		<label className="flex items-center justify-between gap-2">
 			<span className="text-sm text-gray-600 dark:text-gray-300">{label}</span>
-			<div className="flex h-10 w-28 items-center gap-1 rounded-md border border-input bg-background pr-2 dark:border-gray-500 dark:bg-dark">
-				<ControlledInput
-					type="number"
-					min={min}
-					value={value}
-					wrapperClassName="w-auto min-w-0 flex-1"
-					className="h-full w-full border-none bg-transparent px-2 py-0 text-right text-robin-500 dark:bg-transparent dark:text-white"
-					onChange={(e) => onChange(Number(e.target.value))}
-				/>
-				<span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
-					{suffix}
-				</span>
-			</div>
+			<ControlledInput
+				type="number"
+				suffix={suffix}
+				min={min}
+				value={value}
+				wrapperClassName="w-28"
+				className="text-right"
+				onChange={(e) => onChange(Number(e.target.value))}
+			/>
 		</label>
 	);
 }
