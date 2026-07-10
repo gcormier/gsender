@@ -1,0 +1,17 @@
+{
+	"id": "com.sienci.move-to-here",
+	"name": "Move To Here",
+	"version": "0.1.0",
+	"engine": ">=1.6.0",
+	"ui": {
+		"entry": "ui/index.html",
+		"contributions": [
+			{
+				"slot": "visualizer-overlay",
+				"label": "Move To Here",
+				"icon": "🎯"
+			}
+		]
+	},
+	"permissions": ["machine:read", "machine:write"]
+}
