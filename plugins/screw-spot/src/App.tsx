@@ -91,6 +91,54 @@ const patchToMm = (
 const ACCENT = "rgba(14, 246, 174, 0.95)";
 const SAFE_RING = "rgba(148, 163, 184, 0.9)";
 
+// Persist the edited params so they carry across panel toggles and gSender
+// restarts. The plugin iframe runs same-origin from a stable URL, so its
+// localStorage survives sessions; we store the canonical millimetre params (never
+// the display-unit view, so switching mm/in can't corrupt them) under a
+// namespaced key. Points/spots stay job-specific and are intentionally not saved.
+const PARAMS_STORAGE_KEY = "screw-spot:params";
+
+const loadStoredParams = (): ScrewSpotParams => {
+	try {
+		const raw = localStorage.getItem(PARAMS_STORAGE_KEY);
+		if (!raw) {
+			return DEFAULT_SCREWSPOT_PARAMS;
+		}
+		const saved = JSON.parse(raw) as Partial<ScrewSpotParams>;
+		// Merge over defaults so a blob saved by an older version (missing newer
+		// fields) still fills them, and drop anything of the wrong type so corrupt
+		// or hand-edited storage can't produce NaN heights or a bad aux enum.
+		const merged: ScrewSpotParams = { ...DEFAULT_SCREWSPOT_PARAMS };
+		const numericTarget = merged as unknown as Record<string, number>;
+		for (const key of Object.keys(
+			DEFAULT_SCREWSPOT_PARAMS,
+		) as (keyof ScrewSpotParams)[]) {
+			const value = saved[key];
+			if (key === "auxOutput") {
+				if (value === "none" || value === "mist" || value === "flood") {
+					merged.auxOutput = value;
+				}
+				continue;
+			}
+			if (typeof value === "number" && Number.isFinite(value)) {
+				numericTarget[key] = value;
+			}
+		}
+		return merged;
+	} catch {
+		return DEFAULT_SCREWSPOT_PARAMS;
+	}
+};
+
+const saveStoredParams = (params: ScrewSpotParams) => {
+	try {
+		localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
+	} catch {
+		// Storage may be unavailable (private mode / opaque origin); persistence is
+		// best-effort, so a failure just means params won't carry across sessions.
+	}
+};
+
 const App = () => {
 	const workspace = useWorkspaceState<WorkspaceState>();
 	const units: "mm" | "in" = workspace?.units === "in" ? "in" : "mm";
@@ -121,13 +169,17 @@ const App = () => {
 	);
 
 	// Canonical millimetre params; the panel sees/edits them in display units.
-	const [paramsMm, setParamsMm] = useState<ScrewSpotParams>(
-		DEFAULT_SCREWSPOT_PARAMS,
-	);
+	// Hydrated from localStorage (lazy init) so the last-used values are restored.
+	const [paramsMm, setParamsMm] = useState<ScrewSpotParams>(loadStoredParams);
 	const displayParams = useMemo(
 		() => paramsToDisplay(paramsMm, units),
 		[paramsMm, units],
 	);
+
+	// Persist edits (canonical mm) so they survive panel toggles and app restarts.
+	useEffect(() => {
+		saveStoredParams(paramsMm);
+	}, [paramsMm]);
 
 	const [points, setPoints] = useState<ScrewSpotPoint[]>([]);
 	const [placing, setPlacing] = useState(false);
@@ -146,7 +198,10 @@ const App = () => {
 	});
 
 	// Pin the camera to Top and lock rotation while placing so clicks map cleanly
-	// onto the XY work plane — mirrors the native arming behaviour.
+	// onto the XY work plane, then toggle back to the 3D view when placing ends —
+	// mirrors Move To Here, which restores the camera when its pick disarms. (The
+	// plugin bridge can't read the current camera view, so we round-trip to the
+	// default 3D view rather than whatever the user was on before.)
 	useEffect(() => {
 		if (!placing) {
 			return;
@@ -155,6 +210,7 @@ const App = () => {
 		gsender.viewer.camera.lockRotate(true).catch(() => {});
 		return () => {
 			gsender.viewer.camera.lockRotate(false).catch(() => {});
+			gsender.viewer.camera.set("3d").catch(() => {});
 		};
 	}, [placing]);
 
@@ -297,7 +353,7 @@ const App = () => {
 	]);
 
 	return (
-		<div className="flex h-full flex-col">
+		<div className="flex h-full flex-col overflow-hidden">
 			<ScrewSpotPanel
 				params={displayParams}
 				points={points}

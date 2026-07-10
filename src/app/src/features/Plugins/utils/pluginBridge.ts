@@ -76,15 +76,11 @@ const runMachineCommand = async (payload: Record<string, unknown> = {}) => {
 		throw new Error("cmd is required");
 	}
 
-	return new Promise((resolve, reject) => {
-		controller.command(cmd, ...args, (err: Error | null, data: unknown) => {
-			if (err) {
-				reject(err);
-				return;
-			}
-			resolve(data);
-		});
-	});
+	// `controller.command` is fire-and-forget: it emits over the socket and the
+	// server never acks (see CNCEngine `socket.on('command')`). Waiting on a
+	// callback here would hang forever — resolve once the command is dispatched.
+	controller.command(cmd, ...args);
+	return { ok: true };
 };
 
 const loadGCodeToVisualizer = async ({

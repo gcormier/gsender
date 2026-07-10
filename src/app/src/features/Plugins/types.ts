@@ -26,6 +26,10 @@ export type PluginContribution = {
 	label?: string;
 	route?: string;
 	icon?: string;
+	// For "visualizer-overlay" contributions that drive machine motion: when
+	// true, the host greys out and blocks the overlay toggle unless the machine
+	// is connected and idle (i.e. actually able to accept the command).
+	requiresIdle?: boolean;
 };
 
 export type PluginRecord = {

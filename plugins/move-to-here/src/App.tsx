@@ -66,7 +66,17 @@ const App = () => {
 	const activeState = useTypedSelector<string | undefined, ReduxSnapshot>(
 		(s) => s?.controller?.state?.status?.activeState,
 	);
-	const eligible = isConnected && activeState === "Idle";
+
+	// Keep the pick armed continuously while connected: arm once the machine is
+	// idle, then *stay* armed through the brief non-idle window of the move it
+	// triggers. If we dropped `enabled` the moment activeState left "Idle", the
+	// host would disarm mid-move — restoring the pre-pick 3D camera and then
+	// snapping back to Top when the move finished (a jarring flip). Latching on
+	// `armed` keeps us pinned to Top view for the whole move. `armedRef` holds the
+	// previous render's `armed` (set just after the hook call below).
+	const armedRef = useRef(false);
+	const eligible =
+		isConnected && (activeState === "Idle" || armedRef.current);
 
 	const [progress, setProgress] = useState(0);
 	const [lastPick, setLastPick] = useState<Coords | null>(null);
@@ -111,19 +121,6 @@ const App = () => {
 				const lines = getSafeXYMoveCode(x, y, redux, workspace);
 				const unitModal = unitModalFor(workspace?.units);
 
-				// Drop a transient target marker while the move is dispatched.
-				await gsender.viewer.setOverlay([
-					{
-						id: "move-to-here-target",
-						x,
-						y,
-						shape: "ring",
-						color: "#22c55e",
-						size: 10,
-						label: `X${x.toFixed(2)} Y${y.toFixed(2)}`,
-					},
-				]);
-
 				// Same command the native feature issued:
 				//   controller.command("gcode:safe", getSafeXYMoveCode(x, y), unitModal)
 				await gsender.machine.command("gcode:safe", lines, unitModal);
@@ -133,8 +130,6 @@ const App = () => {
 			} catch (err) {
 				setMessage(err instanceof Error ? err.message : String(err));
 			} finally {
-				// Clear the transient marker once the command has been sent.
-				await gsender.viewer.setOverlay([]).catch(() => {});
 				busyRef.current = false;
 				setSending(false);
 			}
@@ -149,12 +144,18 @@ const App = () => {
 	const { armed, error } = useVisualizerPick("hold", handlePick, {
 		enabled: eligible,
 	});
+	armedRef.current = armed;
 
 	let statusTone: "ok" | "warn" | "info" = "info";
 	let statusText: string;
 	if (!isConnected) {
 		statusTone = "warn";
 		statusText = "Connect a machine to use Move To Here.";
+	} else if (armed) {
+		// Stays armed through the move (see `eligible` latch above), so this wins
+		// over the non-idle branch rather than flashing "must be idle" mid-move.
+		statusTone = "ok";
+		statusText = "Armed — press and hold on the job to move here.";
 	} else if (activeState !== "Idle") {
 		statusTone = "warn";
 		statusText = `Machine must be idle to arm (currently ${
@@ -163,9 +164,6 @@ const App = () => {
 	} else if (error) {
 		statusTone = "warn";
 		statusText = error;
-	} else if (armed) {
-		statusTone = "ok";
-		statusText = "Armed — press and hold on the job to move here.";
 	} else {
 		statusTone = "info";
 		statusText = "Arming…";

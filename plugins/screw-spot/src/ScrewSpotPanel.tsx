@@ -81,11 +81,15 @@ function Field({
 }) {
 	// Lay the unit out as a flex sibling of a borderless input rather than an absolute
 	// suffix overlay: the unit reserves its own width, so the right-aligned value can
-	// never slide underneath it no matter how wide either is.
+	// never slide underneath it no matter how wide either is. The input box flex-grows
+	// to claim the empty horizontal space between it and the label, so long values with
+	// long units (e.g. "1000 mm/min") stay fully visible without widening the panel.
 	return (
-		<label className="flex items-center justify-between gap-2">
-			<span className="text-sm text-gray-600 dark:text-gray-300">{label}</span>
-			<div className="flex h-9 w-28 items-center gap-1 rounded-md border border-gray-300 bg-white pr-2 dark:border-gray-600 dark:bg-gray-900">
+		<label className="flex items-center justify-between gap-3">
+			<span className="shrink-0 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
+				{label}
+			</span>
+			<div className="flex h-9 min-w-0 max-w-[10rem] flex-1 items-center gap-1 rounded-md border border-gray-300 bg-white pr-2 dark:border-gray-600 dark:bg-gray-900">
 				<input
 					type="number"
 					min={min}
@@ -123,7 +127,7 @@ export function ScrewSpotPanel({
 	const heightsIssue = screwSpotHeightsReason(params);
 
 	return (
-		<div className="flex h-full flex-col text-gray-900 dark:text-gray-100">
+		<div className="flex h-full min-h-0 flex-1 flex-col text-gray-900 dark:text-gray-100">
 			<div className="border-b border-gray-200 px-1 pb-2 dark:border-gray-700">
 				<span className="text-xs text-gray-500 dark:text-gray-400">
 					Click safe spots on the job, then run.

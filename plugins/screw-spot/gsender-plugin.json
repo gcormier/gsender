@@ -9,7 +9,8 @@
 			{
 				"slot": "visualizer-overlay",
 				"label": "Screw Spot",
-				"icon": "🔩"
+				"icon": "🔩",
+				"requiresIdle": true
 			}
 		]
 	},

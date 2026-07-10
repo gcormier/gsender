@@ -9,7 +9,8 @@
 			{
 				"slot": "visualizer-overlay",
 				"label": "Move To Here",
-				"icon": "🎯"
+				"icon": "🎯",
+				"requiresIdle": true
 			}
 		]
 	},
