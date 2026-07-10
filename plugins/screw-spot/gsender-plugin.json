@@ -1,0 +1,17 @@
+{
+	"id": "screw-spot",
+	"name": "Screw Spot",
+	"version": "0.1.0",
+	"engine": ">=1.6.0",
+	"ui": {
+		"entry": "ui/index.html",
+		"contributions": [
+			{
+				"slot": "visualizer-overlay",
+				"label": "Screw Spot",
+				"icon": "🔩"
+			}
+		]
+	},
+	"permissions": ["machine:read", "machine:write", "files:read"]
+}
