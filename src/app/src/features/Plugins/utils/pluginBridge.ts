@@ -5,6 +5,7 @@ import controller from "app/lib/controller";
 import { uploadGcodeFileToServer } from "app/lib/fileupload";
 import store from "app/store";
 import reduxStore from "app/store/redux";
+import { setPluginBusy } from "app/store/redux/slices/pluginState.slice";
 import type {
 	OverlayMarker,
 	PLUGIN_BRIDGE_CHANNEL,
@@ -83,6 +84,131 @@ const runMachineCommand = async (payload: Record<string, unknown> = {}) => {
 	return { ok: true };
 };
 
+// --- Plugin-asserted busy latch ------------------------------------------------
+// A plugin can flag the machine as busy for the whole span of a feeder-driven
+// operation (e.g. Screw Spot drilling a batch of holes). The feeder streams
+// line-by-line, so the raw controller `activeState` dips to Idle between moves
+// and the status pill would otherwise flicker. Raising this latch lets the UI
+// show a stable status without touching the loaded job (unlike a real sender
+// run, which would replace the loaded file).
+//
+// The host owns the *release* so plugins don't have to detect completion (the
+// feeder gives them no "finished" callback): once set, we watch the controller
+// and auto-clear after the machine has genuinely returned to Idle and stayed
+// there. `armed` guards against releasing during the latency between the call
+// and the first move — we only start the release countdown after we've seen the
+// machine actually leave Idle at least once.
+const BUSY_IDLE_DEBOUNCE_MS = 1500; // sustained Idle before we call it done
+const BUSY_ARM_GRACE_MS = 15000; // release if no motion ever starts
+const BUSY_MAX_MS = 15 * 60 * 1000; // absolute cap so it can never stick on
+
+let busyUnsubscribe: (() => void) | null = null;
+let busyIdleTimer: ReturnType<typeof setTimeout> | null = null;
+let busyGraceTimer: ReturnType<typeof setTimeout> | null = null;
+let busyMaxTimer: ReturnType<typeof setTimeout> | null = null;
+let busyArmed = false; // has the machine left Idle since we were set?
+
+const clearBusyTimers = () => {
+	for (const t of [busyIdleTimer, busyGraceTimer, busyMaxTimer]) {
+		if (t) {
+			clearTimeout(t);
+		}
+	}
+	busyIdleTimer = null;
+	busyGraceTimer = null;
+	busyMaxTimer = null;
+};
+
+const releasePluginBusy = () => {
+	console.log("[busy] releasePluginBusy()");
+	clearBusyTimers();
+	if (busyUnsubscribe) {
+		busyUnsubscribe();
+		busyUnsubscribe = null;
+	}
+	busyArmed = false;
+	if (reduxStore.getState().pluginState?.busy) {
+		reduxStore.dispatch(setPluginBusy({ busy: false }));
+	}
+};
+
+const onBusyStateChange = () => {
+	const state = reduxStore.getState();
+	if (!state.connection?.isConnected) {
+		console.log("[busy] watcher: disconnected -> release");
+		releasePluginBusy();
+		return;
+	}
+	const activeState = state.controller?.state?.status?.activeState;
+	const isIdle = activeState === GRBL_ACTIVE_STATE_IDLE;
+	if (!isIdle) {
+		// Machine is doing something — arm release and cancel any pending
+		// idle/grace countdowns.
+		if (!busyArmed) {
+			console.log("[busy] watcher: armed (saw activeState=", activeState, ")");
+		}
+		busyArmed = true;
+		if (busyGraceTimer) {
+			clearTimeout(busyGraceTimer);
+			busyGraceTimer = null;
+		}
+		if (busyIdleTimer) {
+			console.log("[busy] watcher: motion resumed -> cancel idle countdown");
+			clearTimeout(busyIdleTimer);
+			busyIdleTimer = null;
+		}
+		return;
+	}
+	// Idle. Only begin the release countdown once we've actually seen motion, so
+	// command/round-trip latency after setBusy(true) can't release us early.
+	if (busyArmed && !busyIdleTimer) {
+		console.log(
+			"[busy] watcher: idle after motion -> start",
+			BUSY_IDLE_DEBOUNCE_MS,
+			"ms release countdown",
+		);
+		busyIdleTimer = setTimeout(releasePluginBusy, BUSY_IDLE_DEBOUNCE_MS);
+	}
+};
+
+const setMachineBusy = async (payload: Record<string, unknown> = {}) => {
+	const busy = !!payload.busy;
+	console.log("[busy] setMachineBusy() payload=", payload);
+	if (!busy) {
+		releasePluginBusy();
+		return { ok: true };
+	}
+
+	const label = typeof payload.label === "string" ? payload.label : null;
+
+	// (Re)arm for a fresh operation: tear down any prior watcher/timers first.
+	clearBusyTimers();
+	if (busyUnsubscribe) {
+		busyUnsubscribe();
+		busyUnsubscribe = null;
+	}
+	busyArmed = false;
+
+	reduxStore.dispatch(setPluginBusy({ busy: true, label }));
+	console.log(
+		"[busy] dispatched setPluginBusy(true); store.pluginState=",
+		reduxStore.getState().pluginState,
+	);
+	busyUnsubscribe = reduxStore.subscribe(onBusyStateChange);
+	// Safety nets: drop the latch if motion never starts, and an absolute cap so
+	// a wedged operation can never leave the pill stuck "busy" forever.
+	busyGraceTimer = setTimeout(() => {
+		if (!busyArmed) {
+			releasePluginBusy();
+		}
+	}, BUSY_ARM_GRACE_MS);
+	busyMaxTimer = setTimeout(releasePluginBusy, BUSY_MAX_MS);
+	// Evaluate immediately in case the machine is already moving.
+	onBusyStateChange();
+
+	return { ok: true };
+};
+
 const loadGCodeToVisualizer = async ({
 	gcode,
 	name,
@@ -106,6 +232,8 @@ const handleBridgeRequest = async (
 			return getMachineContext();
 		case "machine:command":
 			return runMachineCommand(request.payload);
+		case "machine:busy:set":
+			return setMachineBusy(request.payload);
 		case "workspace:get:state":
 			return getWorkspaceSnapshot();
 		case "redux:get:state":

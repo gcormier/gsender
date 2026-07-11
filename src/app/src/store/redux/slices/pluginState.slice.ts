@@ -30,9 +30,7 @@ const pluginStateSlice = createSlice({
 			action: PayloadAction<{ busy: boolean; label?: string | null }>,
 		) => {
 			state.busy = action.payload.busy;
-			state.label = action.payload.busy
-				? (action.payload.label ?? null)
-				: null;
+			state.label = action.payload.busy ? (action.payload.label ?? null) : null;
 		},
 	},
 });

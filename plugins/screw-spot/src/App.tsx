@@ -182,7 +182,10 @@ const App = () => {
 	}, [paramsMm]);
 
 	const [points, setPoints] = useState<ScrewSpotPoint[]>([]);
-	const [placing, setPlacing] = useState(false);
+	// Activating the plugin (mounting this panel) drops straight into placement
+	// mode — there's no separate "Place spots" button. Picking stays armed until
+	// the job runs (onRun disarms it).
+	const [placing, setPlacing] = useState(true);
 	const [status, setStatus] = useState<string | null>(null);
 
 	// --- Picking: append a point per click while "place spots" is active --------
@@ -329,6 +332,18 @@ const App = () => {
 			isGrblHal: controllerType === GRBLHAL,
 		}) as string[];
 		try {
+			// Flag the machine busy for the whole batch before streaming it. We run
+			// through the feeder (machine.command "gcode") so the loaded job is left
+			// untouched, but that makes the controller's activeState flicker Idle
+			// between moves — this latch holds a stable "running" status in the host.
+			// The host owns release (auto-clears once the machine truly goes idle,
+			// and via its own safety nets), so we only raise it here — and clear it
+			// on the catch below if the stream never actually starts.
+			console.log("[busy] plugin: calling setBusy(true)…");
+			await gsender.machine.setBusy(true, "Screw Spot").then(
+				() => console.log("[busy] plugin: setBusy(true) resolved OK"),
+				(e) => console.warn("[busy] plugin: setBusy(true) REJECTED", e),
+			);
 			// Native ran: controller.command("gcode", gcode, controller.context).
 			// The SDK mirror: machine.command("gcode", <lines>, <context>).
 			const ctx = await gsender.machine.getContext();
@@ -338,6 +353,9 @@ const App = () => {
 			);
 			setPlacing(false);
 		} catch (err) {
+			// The command never dispatched — release the busy latch now rather than
+			// leaving the host to time it out on its no-motion grace.
+			await gsender.machine.setBusy(false).catch(() => {});
 			setStatus(err instanceof Error ? err.message : String(err));
 		}
 	}, [
@@ -365,7 +383,6 @@ const App = () => {
 				canRun={canRun}
 				runDisabledReason={runDisabledReason}
 				onParamChange={onParamChange}
-				onTogglePlacing={() => setPlacing((p) => !p)}
 				onRemovePoint={onRemovePoint}
 				onClear={onClear}
 				onRun={onRun}

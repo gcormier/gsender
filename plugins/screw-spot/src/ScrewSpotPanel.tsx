@@ -25,7 +25,6 @@ interface ScrewSpotPanelProps {
 	canRun: boolean;
 	runDisabledReason: string;
 	onParamChange: (patch: Partial<ScrewSpotParams>) => void;
-	onTogglePlacing: () => void;
 	onRemovePoint: (index: number) => void;
 	onClear: () => void;
 	onRun: () => void;
@@ -118,7 +117,6 @@ export function ScrewSpotPanel({
 	canRun,
 	runDisabledReason,
 	onParamChange,
-	onTogglePlacing,
 	onRemovePoint,
 	onClear,
 	onRun,
@@ -135,30 +133,22 @@ export function ScrewSpotPanel({
 			</div>
 
 			<div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-3">
-				{/* Place-spots mode toggle: arms/disarms the host click pick. */}
-				<div className="space-y-1">
-					<button
-						type="button"
-						onClick={onTogglePlacing}
-						className={cx(
-							"w-full rounded-md border px-3 py-2 text-sm font-medium transition-colors",
-							placing
-								? "border-[rgba(14,246,174,0.95)] bg-[rgba(14,246,174,0.12)] text-[rgb(6,150,105)] dark:text-[rgba(14,246,174,0.95)]"
-								: "border-gray-300 bg-white text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800",
-						)}
-					>
-						{placing
-							? armed
+				{/* Placement is active whenever the panel is open (no toggle button);
+				    this is a plain status indicator for the host click pick. */}
+				{placing && (
+					<div className="space-y-1">
+						<div className="w-full rounded-md border border-[rgba(14,246,174,0.95)] bg-[rgba(14,246,174,0.12)] px-3 py-2 text-center text-sm font-medium text-[rgb(6,150,105)] dark:text-[rgba(14,246,174,0.95)]">
+							{armed
 								? "Placing — click the job to add spots"
-								: "Arming…"
-							: "Place spots"}
-					</button>
-					{placing && pickError && (
-						<p className="text-xs text-red-600 dark:text-red-400">
-							Can’t pick: {pickError}
-						</p>
-					)}
-				</div>
+								: "Arming…"}
+						</div>
+						{pickError && (
+							<p className="text-xs text-red-600 dark:text-red-400">
+								Can’t pick: {pickError}
+							</p>
+						)}
+					</div>
+				)}
 
 				<div className="space-y-2">
 					<span className={sectionLabel}>Heights</span>

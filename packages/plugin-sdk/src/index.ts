@@ -24,6 +24,18 @@ export type GsenderClient = {
 	machine: {
 		getContext: () => Promise<unknown>;
 		command: (cmd: string, ...args: unknown[]) => Promise<unknown>;
+		/**
+		 * Flag the machine as busy (or clear it) for the span of an operation the
+		 * plugin drives through {@link machine.command}('gcode', …). While set, the
+		 * host holds a stable "running" status instead of letting it flicker Idle as
+		 * the feeder drains between moves — without replacing the loaded job.
+		 *
+		 * The host owns release: after `setBusy(true)` it watches the controller and
+		 * auto-clears once the machine has genuinely returned to idle, so calling
+		 * `setBusy(false)` is optional (a useful backstop on unmount/abort). Pass an
+		 * optional `label` to show in place of the status (e.g. the operation name).
+		 */
+		setBusy: (busy: boolean, label?: string) => Promise<void>;
 	};
 	workspace: {
 		getState: () => Promise<unknown>;
@@ -73,6 +85,9 @@ export const createGsenderClient = (): GsenderClient => ({
 	machine: {
 		getContext: () => request("machine:get:context"),
 		command: (cmd, ...args) => request("machine:command", { cmd, args }),
+		setBusy: async (busy, label) => {
+			await request("machine:busy:set", { busy, label });
+		},
 	},
 	workspace: {
 		getState: () => request("workspace:get:state"),

@@ -22,6 +22,7 @@ export const store = configureStore({
 		helper,
 		gSenderInfo,
 		shortcuts,
+		pluginState,
 	},
 	middleware: (getDefaultMiddleware) =>
 		getDefaultMiddleware().concat(sagaMiddleware),

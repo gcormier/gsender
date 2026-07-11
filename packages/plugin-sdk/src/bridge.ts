@@ -3,6 +3,7 @@ export const PLUGIN_BRIDGE_CHANNEL = "gsender:plugin-bridge";
 export type PluginBridgeRequestType =
 	| "machine:get:context"
 	| "machine:command"
+	| "machine:busy:set"
 	| "gcode:load:to:visualizer"
 	| "workspace:get:state"
 	| "redux:get:state"

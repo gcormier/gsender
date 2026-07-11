@@ -55,6 +55,7 @@ export type PluginsResponse = {
 export type PluginBridgeRequestType =
 	| "machine:get:context"
 	| "machine:command"
+	| "machine:busy:set"
 	| "workspace:get:state"
 	| "redux:get:state"
 	| "gcode:load:to:visualizer"
