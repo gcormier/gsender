@@ -19,6 +19,13 @@ import controller from 'app/lib/controller.ts';
 import { EEPROM, EEPROMSettings } from 'app/definitions/firmware';
 import cx from 'classnames';
 
+// Auto-square (dual-axis) offsets. grblHAL rejects a write to these with
+// "Setting disabled" unless the axis is already configured as a ganged /
+// auto-squared axis. On import the settings are otherwise sent in numeric
+// order, which places these before the ganged/motor configuration they depend
+// on, so the firmware silently drops them. Apply them last instead.
+const DEFERRED_SETTINGS: EEPROM[] = ['$170', '$171', '$172', '$173'];
+
 export function ProfileBar() {
     const {
         settingsAreDirty,
@@ -91,11 +98,19 @@ export function ProfileBar() {
                         formattedSettings = uploadedSettings;
                     }
 
+                    const deferred: string[] = [];
                     for (const [key, value] of Object.entries(
                         formattedSettings,
                     )) {
+                        if (DEFERRED_SETTINGS.includes(key as EEPROM)) {
+                            deferred.push(`${key}=${value}`);
+                            continue;
+                        }
                         code.push(`${key}=${value}`);
                     }
+                    // Apply deferred (auto-square) settings after everything
+                    // else so their required ganged-axis config is in place.
+                    code.push(...deferred);
                     code.push('$$');
 
                     controller.command('gcode', code);
