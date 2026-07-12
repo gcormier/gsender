@@ -22,6 +22,7 @@ import { ToolNameInput } from 'app/features/ATC/components/ToolNameInput.tsx';
 import Button from 'app/components/Button';
 import partition from 'lodash/partition';
 import { useToolChange } from 'app/features/ATC/utils/ToolChangeContext.tsx';
+import { buildRackSkipMask } from 'app/features/ATC/utils/ATCFunctions.ts';
 import { ToolProbeState } from 'app/features/ATC/types.ts';
 import { useTypedSelector } from 'app/hooks/useTypedSelector.ts';
 import { RootState } from 'app/store/redux';
@@ -50,8 +51,9 @@ export function probeRackTool(toolID: number) {
     controller.command('gcode', [`G65 P301 Q${toolID}`, '$#']);
 }
 
-export function probeEntireRack() {
-    controller.command('gcode', ['G65 P300', '$#']);
+export function probeEntireRack(skipMask: number = 0) {
+    // Q carries a skip mask: bit n set => skip slot (n+1). 0 => probe every slot.
+    controller.command('gcode', [`G65 P300 Q${skipMask}`, '$#']);
 }
 
 const ToolSection = ({
@@ -60,10 +62,12 @@ const ToolSection = ({
     disabled,
     defaultOpen = true,
     allowManualBadge = false,
+    onProbeAll = () => {},
 }: {
     title: string;
     tools: ToolInstance[];
     onProbe?: (toolId: string) => void;
+    onProbeAll?: () => void;
     defaultOpen?: boolean;
     disabled?: boolean;
     allowManualBadge?: boolean;
@@ -101,7 +105,7 @@ const ToolSection = ({
                                         <Button
                                             size="sm"
                                             variant="primary"
-                                            onClick={probeEntireRack}
+                                            onClick={onProbeAll}
                                             disabled={disabled}
                                         >
                                             Probe All
@@ -194,12 +198,17 @@ export function ToolTable({ tools = [], disabled }: ToolTableProps) {
         (tool) => rackEnabled && tool.id <= rackSize,
     );
 
+    // Probe All only touches rack slots; skip any slot with no tool defined.
+    const handleProbeAll = () =>
+        probeEntireRack(buildRackSkipMask(tools, rackSize));
+
     return (
         <div className="sm:rounded-lg w-full h-[500px] gap-1 flex flex-col">
             <ToolSection
                 title="Rack Loaded Tools"
                 tools={onRackTools}
                 onProbe={() => {}}
+                onProbeAll={handleProbeAll}
                 defaultOpen={rackEnabled}
                 disabled={disabled}
                 allowManualBadge={allowManualBadge}
@@ -208,6 +217,7 @@ export function ToolTable({ tools = [], disabled }: ToolTableProps) {
                 title="Manually Loaded Tools"
                 tools={offRackTools}
                 onProbe={() => {}}
+                onProbeAll={handleProbeAll}
                 defaultOpen={!rackEnabled}
                 disabled={disabled}
                 allowManualBadge={allowManualBadge}

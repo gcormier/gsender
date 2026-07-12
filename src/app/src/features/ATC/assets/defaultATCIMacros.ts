@@ -644,6 +644,11 @@ M99`,
 ; Local variables
 #<_current_slot> = 1;
 
+; Skip mask passed as Q (#17). Bit n set => skip slot (n+1).
+; Unset/0 => probe every slot (legacy "Probe All" behaviour).
+; Limited to 24 slots (float32 exact-integer range).
+#<_probe_skip_mask> = #17;
+
 ; ************ BEGIN VALIDATION ************
 
 ;Check initializing
@@ -726,19 +731,27 @@ G65 P504
 
 ; ************ BEGIN TOOL CHANGE ************
 o200 while [#<_current_slot> LE #<_tc_slots>]
-    #1002 = 1;
-    M6T[#<_current_slot>]
-    #1002 = 0;
-    (debug, Tool Change Complete)
-    o210 if [#<_current_tool> EQ #<_current_slot>]
-        (debug, tool change successful, probing current tool)
-        G65P500
-    o210 else
-        (debug, tool change unsuccessful, offset cleared)
-        G10 L1 P[#<_current_slot>] Z0
-    o210 endif
-    ; Move to safe height
-    G53 G0 Z[#<_tc_safe_z>]
+    ; Low bit of the mask flags the current slot: 1 => skip, 0 => probe
+    #<_probe_skip_bit> = [#<_probe_skip_mask> MOD 2]
+    o205 if [#<_probe_skip_bit> LT 1]
+        #1002 = 1;
+        M6T[#<_current_slot>]
+        #1002 = 0;
+        (debug, Tool Change Complete)
+        o210 if [#<_current_tool> EQ #<_current_slot>]
+            (debug, tool change successful, probing current tool)
+            G65P500
+        o210 else
+            (debug, tool change unsuccessful, offset cleared)
+            G10 L1 P[#<_current_slot>] Z0
+        o210 endif
+        ; Move to safe height
+        G53 G0 Z[#<_tc_safe_z>]
+    o205 else
+        (debug, slot #<_current_slot> undefined - skipped)
+    o205 endif
+    ; Shift the mask right by one to line up the next slot's bit
+    #<_probe_skip_mask> = [[#<_probe_skip_mask> - #<_probe_skip_bit>] / 2]
     #<_current_slot> = [#<_current_slot> + 1]
 o200 endwhile
 

@@ -38,6 +38,30 @@ export function mapToolNicknamesAndStatus(
     return toolsArray;
 }
 
+// grblHAL parameters are 32-bit floats, so a single-word bit mask is exact
+// only up to 24 bits. Probe All therefore supports at most 24 rack slots.
+export const MAX_PROBE_SLOTS = 24;
+
+// Builds the skip mask sent to G65 P300 as Q. A bit is SET for every rack slot
+// that has no tool defined (no nickname assigned via the dropdown), so the
+// macro skips it. An all-defined rack yields 0 => probe every slot (legacy).
+export function buildRackSkipMask(
+    tools: ToolInstance[],
+    rackSize: number,
+): number {
+    const slots = Math.min(rackSize, MAX_PROBE_SLOTS);
+    let mask = 0;
+    for (let slot = 1; slot <= slots; slot++) {
+        const tool = tools.find((t) => t.id === slot);
+        const name = tool?.nickname?.trim();
+        const defined = !!name && name !== '-';
+        if (!defined) {
+            mask |= 1 << (slot - 1);
+        }
+    }
+    return mask >>> 0;
+}
+
 export function getToolFlags(
     toolNumber: number,
     rackSize: number,
