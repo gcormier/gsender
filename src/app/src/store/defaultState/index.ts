@@ -385,6 +385,7 @@ const defaultState: State = {
             skimDepth: 1,
             maxDepth: 1,
             spindleRPM: 17000,
+            flutes: 2,
             type: SPIRAL_MOVEMENT,
             startPosition: START_POSITION_BACK_LEFT,
             spindle: M3 as SPINDLE,

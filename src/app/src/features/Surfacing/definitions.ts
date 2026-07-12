@@ -9,6 +9,7 @@ export interface Surfacing {
     skimDepth: number;
     maxDepth: number;
     spindleRPM: number;
+    flutes: number;
     type: string;
     startPosition: string;
     spindle: SPINDLE;

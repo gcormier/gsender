@@ -51,7 +51,12 @@ const SurfacingTool = () => {
 
     // Initialize state with appropriate units
     const getInitialState = (): Surfacing => {
-        const surfacing = surfacingConfig.get('', defaultSurfacingState);
+        const surfacing = {
+            // Fall back to the default flute count for configs saved before
+            // this field existed.
+            flutes: defaultSurfacingState.flutes,
+            ...surfacingConfig.get('', defaultSurfacingState),
+        };
 
         if (units === IMPERIAL_UNITS) {
             return {
@@ -72,6 +77,16 @@ const SurfacingTool = () => {
 
     // Check if cut depth exceeds max depth
     const isCutDepthExceedingMax = surfacing.skimDepth > surfacing.maxDepth;
+
+    // Chipload per tooth = feedrate / (RPM * flutes). Since feedrate is already
+    // in the active display units (mm/min or inch/min), the result is in the
+    // matching per-tooth units (mm/tooth or inch/tooth).
+    const canCalculateChipload =
+        surfacing.spindleRPM > 0 && surfacing.flutes > 0;
+    const chipload = canCalculateChipload
+        ? surfacing.feedrate / (surfacing.spindleRPM * surfacing.flutes)
+        : 0;
+    const chiploadDecimals = units === IMPERIAL_UNITS ? 5 : 4;
 
     useEffect(() => {
         const saveState = () => {
@@ -373,6 +388,48 @@ const SurfacingTool = () => {
                                             }}
                                             aria-label="Toggle spindle delay"
                                         />
+                                    </div>
+                                </Tooltip>
+                            </div>
+                        </InputArea>
+                        <InputArea label="Flutes">
+                            <div className="grid grid-cols-2 gap-2 col-span-3">
+                                <Tooltip
+                                    content={`Number of flutes/teeth on the bit (${convertedDefaultSurfacingState.flutes} default)`}
+                                >
+                                    <ControlledInput
+                                        type="number"
+                                        min={1}
+                                        max={4}
+                                        step={1}
+                                        className={inputStyle}
+                                        wrapperClassName="w-full"
+                                        value={surfacing.flutes}
+                                        immediateOnChange
+                                        onChange={(e) => {
+                                            const value = Math.round(
+                                                Number(e.target.value),
+                                            );
+                                            const clamped = Math.min(
+                                                4,
+                                                Math.max(1, value || 1),
+                                            );
+                                            onChange('flutes', clamped);
+                                        }}
+                                    />
+                                </Tooltip>
+                                <Tooltip content="Chipload per tooth, calculated from feed rate, spindle RPM, and flute count">
+                                    <div className="flex items-center gap-2 justify-center">
+                                        <span className="font-light text-sm dark:text-white whitespace-nowrap">
+                                            Chipload
+                                        </span>
+                                        <span className="text-xl font-light text-blue-500 whitespace-nowrap">
+                                            {canCalculateChipload
+                                                ? `${chipload.toFixed(
+                                                      chiploadDecimals,
+                                                  )} ${units}/tooth`
+                                                : '—'}
+                                        </span>
                                     </div>
                                 </Tooltip>
                             </div>
